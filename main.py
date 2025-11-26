@@ -8,10 +8,16 @@ from aiogram import Bot, Dispatcher
 from aiogram.types import Message
 from gigachat import GigaChat
 from gigachat.models import Chat, Messages, MessagesRole
+from dotenv import load_dotenv
 
+
+load_dotenv()
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+API_KEY = os.getenv("API_KEY")
 
 logging.basicConfig(level=logging.INFO)
-bot = Bot("7869826940:AAHbb4PvYl_ks7a2s9GaCQB4hoImzcnnChQ")
+bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
 
 payload = Chat(
@@ -48,7 +54,7 @@ async def start(message: Message):
     else:
         text = message.text
     print(message.from_user.username, ": ", text)
-    with GigaChat(credentials="MjllMzI5MDMtMDRmYi00MDcwLWEzMWItYTYxZTEzZjZhY2RkOjFiYmE5NzNkLWIxMzItNGIyMi05NjYwLTBiMmE4ODYwOWEzZA==", verify_ssl_certs=False) as giga:
+    with GigaChat(credentials=API_KEY, verify_ssl_certs=False) as giga:
         payload.messages.append(Messages(role=MessagesRole.USER, content=text))
         response = giga.chat(payload)
         payload.messages.append(response.choices[0].message)
