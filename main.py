@@ -30,6 +30,7 @@ payload = Chat(
 )
 
 
+
 @dp.message()
 async def start(message: Message):
     if message.voice:
@@ -48,7 +49,6 @@ async def start(message: Message):
         for f in (ogg_path, wav_path):
             if os.path.exists(f):
                 os.remove(f)
-
 
         text = r.recognize_google(audio_data, language="ru-RU")
     else:
