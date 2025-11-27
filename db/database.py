@@ -6,14 +6,21 @@ from sqlalchemy.exc import IntegrityError
 from db.models import Schedule, User, Subject
 
 
-async def import_schedule_from_json(session: AsyncSession, user_id: int, schedule_data: list):
+async def get_user_grade(session: AsyncSession, tg_id: int) -> str | None:
     result = await session.execute(
-        select(User).filter_by(id=user_id)
+        select(User.grade).filter_by(tg_id=tg_id)
+    )
+    return result.scalar_one_or_none()
+
+
+async def import_schedule_from_json(session: AsyncSession, tg_id: int, schedule_data: list):
+    result = await session.execute(
+        select(User).filter_by(tg_id=tg_id)
     )
     user = result.scalar_one_or_none()
 
     if not user:
-        raise ValueError(f"Пользователь с id={user_id} не найден")
+        raise ValueError(f"Пользователь с tg_id={tg_id} не найден")
 
     for day_data in schedule_data:
         date_obj = datetime.strptime(day_data['date'], '%d.%m.%Y').date()
@@ -25,7 +32,7 @@ async def import_schedule_from_json(session: AsyncSession, user_id: int, schedul
 
             result = await session.execute(
                 select(Subject).filter_by(
-                    user_id=user_id,
+                    user_id=user.id,
                     name=subject_name
                 )
             )
@@ -33,7 +40,7 @@ async def import_schedule_from_json(session: AsyncSession, user_id: int, schedul
             
             if not subject:
                 subject = Subject(
-                    user_id=user_id,
+                    user_id=user.id,
                     name=subject_name,
                     classroom=classroom
                 )
@@ -45,7 +52,7 @@ async def import_schedule_from_json(session: AsyncSession, user_id: int, schedul
 
             result = await session.execute(
                 select(Schedule).filter_by(
-                    user_id=user_id,
+                    user_id=user.id,
                     date=date_obj,
                     lesson_number=lesson_number
                 )
@@ -54,7 +61,7 @@ async def import_schedule_from_json(session: AsyncSession, user_id: int, schedul
             
             if not schedule_entry:
                 schedule_entry = Schedule(
-                    user_id=user_id,
+                    user_id=user.id,
                     date=date_obj,
                     lesson_number=lesson_number,
                     subject_id=subject.id
