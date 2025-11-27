@@ -3,18 +3,23 @@ import os
 import logging
 import speech_recognition as sr
 
-from pydub import AudioSegment
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message
+
 from gigachat import GigaChat
 from gigachat.models import Chat, Messages, MessagesRole
+
+from pydub import AudioSegment
+
 from dotenv import load_dotenv
 
+from db.core import init_db, get_session_maker
 
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_KEY = os.getenv("API_KEY")
+POSTGRES_URL = os.getenv("POSTGRES_SQL")
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(BOT_TOKEN)
@@ -28,7 +33,6 @@ payload = Chat(
         )
     ],
 )
-
 
 
 @dp.message()
@@ -53,7 +57,9 @@ async def start(message: Message):
         text = r.recognize_google(audio_data, language="ru-RU")
     else:
         text = message.text
+
     print(message.from_user.username, ": ", text)
+
     with GigaChat(credentials=API_KEY, verify_ssl_certs=False) as giga:
         payload.messages.append(Messages(role=MessagesRole.USER, content=text))
         response = giga.chat(payload)
