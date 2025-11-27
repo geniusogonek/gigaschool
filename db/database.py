@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
@@ -99,7 +99,7 @@ async def get_lesson_by_date_and_number(session: AsyncSession, tg_id: int, date_
     return {
         "lesson_number": schedule.lesson_number,
         "lesson": schedule.subject.name if schedule.subject else None,
-        "classroom": schedule.subject.classroom + " кабинет!" if schedule.subject else None,
+        "classroom": schedule.subject.classroom or "" + " кабинет!" if schedule.subject else None,
         "schedule_id": schedule.id
     }
 
@@ -229,7 +229,7 @@ async def add_homework(session: AsyncSession, tg_id: int, date_str: str, subject
     existing_homework = result.scalar_one_or_none()
     
     if existing_homework:
-        existing_homework.text = homework_text
+        existing_homework.text = existing_homework.text + "\n" + homework_text
     else:
         homework = Homework(schedule_id=schedule.id, text=homework_text)
         session.add(homework)
@@ -239,3 +239,118 @@ async def add_homework(session: AsyncSession, tg_id: int, date_str: str, subject
     except IntegrityError as e:
         await session.rollback()
         raise Exception(f"Ошибка при сохранении домашнего задания: {str(e)}")
+
+
+async def get_homework_by_date(session: AsyncSession, tg_id: int, date_str: str) -> list[dict]:
+    result = await session.execute(
+        select(User).filter_by(tg_id=tg_id)
+    )
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        raise ValueError(f"Пользователь с tg_id={tg_id} не найден")
+    
+    date_obj = parse_date(date_str)
+    
+    result = await session.execute(
+        select(Schedule)
+        .options(selectinload(Schedule.subject), selectinload(Schedule.homework))
+        .filter_by(user_id=user.id, date=date_obj)
+        .order_by(Schedule.lesson_number)
+    )
+    schedules = result.scalars().all()
+    
+    homework_list = []
+    for schedule in schedules:
+        if schedule.homework:
+            for hw in schedule.homework:
+                homework_list.append({
+                    "lesson_number": schedule.lesson_number,
+                    "subject": schedule.subject.name if schedule.subject else None,
+                    "text": hw.text,
+                    "homework_id": hw.id
+                })
+    
+    return homework_list
+
+
+async def get_average_load_level(session: AsyncSession, tg_id: int, date_str: str) -> float | None:
+    result = await session.execute(
+        select(User).filter_by(tg_id=tg_id)
+    )
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        raise ValueError(f"Пользователь с tg_id={tg_id} не найден")
+    
+    date_obj = parse_date(date_str)
+    
+    result = await session.execute(
+        select(func.avg(Subject.load_level))
+        .select_from(Schedule)
+        .join(Subject, Schedule.subject_id == Subject.id)
+        .filter(Schedule.user_id == user.id, Schedule.date == date_obj)
+    )
+    avg_load = result.scalar()
+    
+    return float(avg_load) if avg_load is not None else None
+
+
+async def edit_schedule(session: AsyncSession, tg_id: int, changes: list[dict]):
+    result = await session.execute(
+        select(User).filter_by(tg_id=tg_id)
+    )
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        raise ValueError(f"Пользователь с tg_id={tg_id} не найден")
+    
+    for change in changes:
+        date_obj = parse_date(change["date"])
+        subject_from_name = change["subject_from"]
+        subject_to_name = change["subject_to"]
+        
+        result = await session.execute(
+            select(Subject).filter_by(user_id=user.id, name=subject_from_name)
+        )
+        subject_from = result.scalar_one_or_none()
+        
+        if not subject_from:
+            raise ValueError(f"Предмет '{subject_from_name}' не найден у пользователя")
+        
+        result = await session.execute(
+            select(Schedule).filter_by(
+                user_id=user.id,
+                date=date_obj,
+                subject_id=subject_from.id
+            )
+        )
+        schedule_entry = result.scalar_one_or_none()
+        
+        if not schedule_entry:
+            raise ValueError(f"Урок '{subject_from_name}' на дату {change['date']} не найден в расписании")
+        
+        if subject_to_name == "---":
+            schedule_entry.subject_id = None
+        else:
+            result = await session.execute(
+                select(Subject).filter_by(user_id=user.id, name=subject_to_name)
+            )
+            subject_to = result.scalar_one_or_none()
+            
+            if not subject_to:
+                subject_to = Subject(
+                    user_id=user.id,
+                    name=subject_to_name,
+                    classroom=None
+                )
+                session.add(subject_to)
+                await session.flush()
+            
+            schedule_entry.subject_id = subject_to.id
+    
+    try:
+        await session.commit()
+    except IntegrityError as e:
+        await session.rollback()
+        raise Exception(f"Ошибка при изменении расписания: {str(e)}")

@@ -4,11 +4,35 @@ from datetime import datetime
 
 
 def parse_schedule_excel(file_path, class_number):
+    LOAD_LEVELS = {
+        "РОВ": 1,
+        "история": 5,
+        "физика": 8,
+        "англ/инф": 6,
+        "рус.яз": 6,
+        "инф/англ": 6,
+        "алгебра": 9,
+        "родн.яз": 6,
+        "химия": 8,
+        "литер": 6,
+        "географ": 5,
+        "англ.яз": 6,
+        "труд": 4,
+        "физ-ра": 3,
+        "геомет": 9,
+        "биолог": 6,
+        "кл.час": 1,
+        "вер и ст": 7,
+        "профмин": 2,
+        "ОБЗР": 4,
+        "обществ": 5,
+        "---": 0
+    }
+    
     def clean_cell_value(value):
         if pd.isna(value) or value in ['---', '----', '-----', '', ' ']:
             return None
         return str(value).strip()
-
 
     def extract_lesson_info(cell_value):
         if not cell_value:
@@ -23,6 +47,10 @@ def parse_schedule_excel(file_path, class_number):
         else:
             return cell_value, None
 
+    def get_load_level(lesson_name):
+        if not lesson_name or lesson_name == "---":
+            return 0
+        return LOAD_LEVELS.get(lesson_name, 5)
 
     def extract_date_from_sheet(df):
         for i in range(min(10, len(df))):
@@ -55,7 +83,6 @@ def parse_schedule_excel(file_path, class_number):
                     return next_cell.strftime('%d.%m.%Y')
         
         return None
-
 
     excel_file = pd.ExcelFile(file_path)
     results = []
@@ -110,13 +137,15 @@ def parse_schedule_excel(file_path, class_number):
                 lessons.append({
                     "lesson": lesson_name if lesson_name else "---",
                     "classroom": classroom if classroom else "",
-                    "lesson_number": col_idx
+                    "lesson_number": col_idx,
+                    "load_level": get_load_level(lesson_name)
                 })
             else:
                 lessons.append({
                     "lesson": "---",
                     "classroom": "",
-                    "lesson_number": col_idx
+                    "lesson_number": col_idx,
+                    "load_level": 0
                 })
 
         if lessons:

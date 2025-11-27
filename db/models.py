@@ -35,6 +35,8 @@ class Subject(Base):
     user = relationship("User", back_populates="subjects")
     lessons = relationship("Schedule", back_populates="subject")
 
+    load_level = Column(Integer)
+
     __table_args__ = (
         UniqueConstraint("user_id", "name", name="uq_user_subject_name"),
     )

@@ -16,7 +16,10 @@ from pydub import AudioSegment
 from dotenv import load_dotenv
 
 from db.core import init_db, get_session_maker
-from db.database import import_schedule_from_json, get_user_grade, get_lesson_by_date_and_number, get_schedule_by_date, create_user
+from db.database import (
+    import_schedule_from_json, get_user_grade, get_lesson_by_date_and_number, get_schedule_by_date, create_user,
+    add_homework, get_homework_by_date, get_average_load_level, edit_schedule
+)
 from parse_files.parse_excel import parse_schedule_excel
 from gigachatapi import get_answer
 
@@ -95,7 +98,7 @@ async def get_document(message: Message, state: FSMContext):
     if os.path.exists(filename):
         os.remove(filename)
     
-    await message.answer("Расписание успешно загружено!")
+    await message.answer("Молодец! Расписание успешно загружено! Теперь ты можешь задавать свои вопросы. :)")
 
 
 @dp.message()
@@ -135,13 +138,26 @@ async def speak(message: Message, state: FSMContext):
     print(json_data)
     match json_data["type"]:
         case "undetected":
-            await message.answer("Неверный запрос.")
+            await message.answer("Извини, я немного не понимаю твой вопрос :(\nМожешь, пожалуйста, переформулировать его?")
         case "schedule":
             async with SessionMaker() as session:
                 schedule = await get_schedule_by_date(session, message.from_user.id, json_data["date"])
                 schedule_list = [f"{i['lesson_number']}. {i['lesson']}, {i['classroom']}каб.".replace("None", "без ") for i in schedule]
+
                 if len(schedule_list) != 0:
-                    await message.answer("Привет! Вот твое расписание:\n" + "\n".join(schedule_list))
+                    avg_load = await get_average_load_level(session, message.from_user.id, json_data["date"])
+
+                    if avg_load is not None:
+                        if avg_load <= 4:
+                            load_message = "💚 Легкий денёк! Отличное время набраться сил и заняться любимыми делами."
+                        elif avg_load <= 7:
+                            load_message = "💛 День с умеренной нагрузкой. Держи баланс между учёбой и отдыхом!"
+                        else:
+                            load_message = "❤️ Насыщенный день! Собери волю в кулак — ты справишься!"
+
+                        await message.answer(f"Вот твое расписание:\n{'\n'.join(schedule_list)}\n\n{load_message}")
+                    else:
+                        await message.answer("Вот твое расписание:\n" + "\n".join(schedule_list))
                 else:
                     await message.answer("К сожалению, ты пока не загрузил расписание на этот день.")
         case "lesson":
@@ -151,8 +167,37 @@ async def speak(message: Message, state: FSMContext):
                     await message.answer(f"{lesson['lesson']}, {lesson['classroom'] or 'без кабинета'}")
             else:
                 await message.answer("заглушка")
+        case "add_homework":
+            async with SessionMaker() as session:
+                try:
+                    await add_homework(session, message.from_user.id, json_data["date"], json_data["subject_name"], json_data["text"])
+                    await message.answer(f"✅ Домашнее задание по предмету '{json_data['subject_name']}' добавлено!")
+                except:
+                    await message.answer(f"В указанный день нет урока '{json_data['subject_name']}' :(")
+        case "get_homework":
+            async with SessionMaker() as session:
+                homework = [f"{i['subject']}: {i['text']}" for i in await get_homework_by_date(session, message.from_user.id, json_data["date"])]
+                if homework != []:
+                    await message.answer("Вот твое домашнее задание:\n" + "\n".join(homework))
+                else:
+                    await message.answer("На указанный день нет домашнего задания! :)")
+        case "edit_schedule":
+            async with SessionMaker() as session:
+                try:
+                    await edit_schedule(session, message.from_user.id, json_data["changes"])
+                    changes_text = []
+                    for change in json_data["changes"]:
+                        if change["subject_to"] == "---":
+                            changes_text.append(f"• {change['subject_from']} отменён")
+                        else:
+                            changes_text.append(f"• {change['subject_from']} → {change['subject_to']}")
+                    
+                    await message.answer(f"✏️ Расписание обновлено!\n\n" + "\n".join(changes_text))
+                except Exception as e:
+                    await message.answer(f"Не удалось изменить расписание: {str(e)}")
         case _:
             await message.answer(str(json_data))
+
 
 
 async def main():
