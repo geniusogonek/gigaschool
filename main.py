@@ -1,20 +1,28 @@
 import asyncio
+from json import loads
 import os
 import logging
 import speech_recognition as sr
 
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message
-from aiogram.filters import BaseFilter
+from aiogram.filters import BaseFilter, CommandStart, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
 
 from pydub import AudioSegment
 
 from dotenv import load_dotenv
 
 from db.core import init_db, get_session_maker
-from db.database import import_schedule_from_json, get_user_grade
+from db.database import import_schedule_from_json, get_user_grade, get_lesson_by_date_and_number, get_schedule_by_date, create_user
 from parse_files.parse_excel import parse_schedule_excel
 from gigachatapi import get_answer
+
+
+class RegistrationStates(StatesGroup):
+    waiting_for_grade = State()
 
 
 class DocumentTypeFilter(BaseFilter):
@@ -35,21 +43,48 @@ POSTGRES_URL = os.getenv("POSTGRES_URL")
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(BOT_TOKEN)
-dp = Dispatcher()
-
+storage = MemoryStorage()
+dp = Dispatcher(storage=storage)
 
 engine = None
 SessionMaker = None
 
 
+@dp.message(CommandStart())
+async def start_handler(message: Message, state: FSMContext):
+    async with SessionMaker() as session:
+        existing_grade = await get_user_grade(session, message.from_user.id)
+        
+        if existing_grade:
+            await message.answer(f"Ты уже зарегистрирован. Твой класс: {existing_grade}")
+            return
+    
+    await state.set_state(RegistrationStates.waiting_for_grade)
+    await message.answer("Привет! Напиши свой класс (например, 9А или 11Б):")
+
+
+@dp.message(StateFilter(RegistrationStates.waiting_for_grade))
+async def process_grade(message: Message, state: FSMContext):
+    grade = message.text.strip()
+    
+    async with SessionMaker() as session:
+        await create_user(session, message.from_user.id, grade)
+    
+    await state.clear()
+    await message.answer(f"Отлично! Твой класс: {grade}\nТеперь пришли мне свое расписание в формате Excel.")
+
+
 @dp.message(DocumentTypeFilter(["xlsx", "xls"]))
-async def get_document(message: Message):
+async def get_document(message: Message, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state == RegistrationStates.waiting_for_grade:
+        await message.answer("Сначала укажи свой класс!")
+        return
+    
     file = await bot.get_file(message.document.file_id)
     ext = message.document.file_name.split(".")[-1]
     filename = f"{message.from_user.id}.{ext}"
     await bot.download_file(file.file_path, filename)
-
-
 
     async with SessionMaker() as session:
         grade = await get_user_grade(session, message.from_user.id)
@@ -59,10 +94,17 @@ async def get_document(message: Message):
 
     if os.path.exists(filename):
         os.remove(filename)
+    
+    await message.answer("Расписание успешно загружено!")
 
 
 @dp.message()
-async def start(message: Message):
+async def speak(message: Message, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state == RegistrationStates.waiting_for_grade:
+        await message.answer("Сначала укажи свой класс!")
+        return
+    
     if message.voice:
         file = await message.bot.get_file(message.voice.file_id)
         ogg_path = f"{message.from_user.id}.ogg"
@@ -79,13 +121,38 @@ async def start(message: Message):
         for f in (ogg_path, wav_path):
             if os.path.exists(f):
                 os.remove(f)
-
-        text = r.recognize_google(audio_data, language="ru-RU")
+        try:
+            text = r.recognize_google(audio_data, language="ru-RU")
+        except:
+            return await message.answer("Не удалось распознать голос.")
     else:
         text = message.text
 
-    logging.info(f"{message.from_user.username}, {message.from_user.id}: {text}")
-    await message.answer(get_answer(text))
+    logging.info(f"New message: username={message.from_user.username} id={message.from_user.id} text={text}")
+    async with SessionMaker() as session:
+        answer = await get_answer(session, text, message.from_user.id)
+    json_data = loads(answer)
+    print(json_data)
+    match json_data["type"]:
+        case "undetected":
+            await message.answer("Неверный запрос.")
+        case "schedule":
+            async with SessionMaker() as session:
+                schedule = await get_schedule_by_date(session, message.from_user.id, json_data["date"])
+                schedule_list = [f"{i['lesson_number']}. {i['lesson']}, {i['classroom']}каб.".replace("None", "без ") for i in schedule]
+                if len(schedule_list) != 0:
+                    await message.answer("Привет! Вот твое расписание:\n" + "\n".join(schedule_list))
+                else:
+                    await message.answer("К сожалению, ты пока не загрузил расписание на этот день.")
+        case "lesson":
+            if json_data.get("lesson_number") is not None:
+                async with SessionMaker() as session:
+                    lesson = await get_lesson_by_date_and_number(session, message.from_user.id, json_data["date"], json_data["lesson_number"])
+                    await message.answer(f"{lesson['lesson']}, {lesson['classroom'] or 'без кабинета'}")
+            else:
+                await message.answer("заглушка")
+        case _:
+            await message.answer(str(json_data))
 
 
 async def main():
