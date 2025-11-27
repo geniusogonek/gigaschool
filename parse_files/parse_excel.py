@@ -1,82 +1,115 @@
 import pandas as pd
-from openpyxl import load_workbook
 import re
 from datetime import datetime
 
-def extract_date_from_sheet(sheet_df):
-    """
-    Ищет дату в любом месте листа.
-    Работает с форматами dd.mm.yyyy, dd/mm/yyyy, yyyy-mm-dd.
-    """
-    date_pattern = r"(\b\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\b)"
-    
-    for row in sheet_df.astype(str).values:
-        for cell in row:
-            match = re.search(date_pattern, cell)
-            if match:
-                try:
-                    return pd.to_datetime(match.group(0), dayfirst=True).date()
-                except:
-                    pass
-    return None
+def parse_schedule_excel(file_path, class_number):
+    def clean_cell_value(value):
+        if pd.isna(value) or value in ['---', '----', '-----', '', ' ']:
+            return None
+        return str(value).strip()
 
+    def extract_lesson_info(cell_value):
+        if not cell_value:
+            return None, None
 
-def parse_schedule(file_path, class_name):
-    wb = load_workbook(file_path, data_only=True)
-    result = []
-
-    for sheet in wb.sheetnames:
-        ws = wb[sheet]
-        df = pd.DataFrame(ws.values)
-
-        # --- 1. Поиск даты на листе ---
-        date_on_sheet = extract_date_from_sheet(df)
+        parts = cell_value.split('\n')
         
-        # Если лист без даты — пропускаем
-        if not date_on_sheet:
+        if len(parts) >= 2:
+            lesson = parts[0].strip()
+            classroom = parts[1].strip()
+            return lesson, classroom
+        else:
+            return cell_value, None
+
+    def extract_date_from_sheet(df):
+        for i in range(min(10, len(df))):
+            for col in df.columns:
+                cell = df.iloc[i][col]
+
+                if isinstance(cell, datetime):
+                    return cell.strftime('%d.%m.%Y')
+
+                cell_str = str(cell)
+                if 'на' in cell_str.lower() and ('2025' in cell_str or '2024' in cell_str):
+                    date_match = re.search(r'(\d{4}[-/]\d{2}[-/]\d{2}|\d{2}\.\d{2}\.\d{4})', cell_str)
+                    if date_match:
+                        date_str = date_match.group(1)
+                        try:
+                            if '-' in date_str:
+                                date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+                            else:
+                                date_obj = datetime.strptime(date_str, '%d.%m.%Y')
+                            return date_obj.strftime('%d.%m.%Y')
+                        except:
+                            pass
+
+        for i in range(min(10, len(df))):
+            for col_idx in range(len(df.columns) - 1):
+                cell = str(df.iloc[i][col_idx])
+                next_cell = df.iloc[i][col_idx + 1]
+                
+                if 'на' in cell.lower() and isinstance(next_cell, datetime):
+                    return next_cell.strftime('%d.%m.%Y')
+        
+        return None
+
+    excel_file = pd.ExcelFile(file_path)
+    results = []
+    
+    for sheet_name in excel_file.sheet_names:
+        if sheet_name == 'Лист15':
             continue
 
-        # --- 2. Поиск колонки класса ---
-        header_row = df.iloc[0].astype(str).str.lower()
-        class_col_index = None
-        
-        for idx, val in enumerate(header_row):
-            if class_name.lower() in val:
-                class_col_index = idx
+        df = pd.read_excel(file_path, sheet_name=sheet_name, header=None)
+
+        date = extract_date_from_sheet(df)
+        if not date:
+            print(f"не удалось найти дату на листе '{sheet_name}'")
+            continue
+
+        header_row = None
+        for i in range(min(15, len(df))):
+            if 'класс' in str(df.iloc[i][0]).lower():
+                header_row = i
                 break
         
-        if class_col_index is None:
-            continue  # В этом листе нет нужного класса
+        if header_row is None:
+            print(f"не удалось найти строку 'класс' на листе '{sheet_name}'")
+            continue
 
-        # --- 3. Извлечение урок → кабинет ---
+        class_row = None
+        for i in range(header_row + 1, len(df)):
+            cell_value = clean_cell_value(df.iloc[i][0])
+            if cell_value and class_number in cell_value:
+                class_row = i
+                break
+
+        if class_row is None:
+            continue
+
         lessons = []
-        for row in df.iloc[1:].values:
-            lesson_info = row[class_col_index]
-            if lesson_info and str(lesson_info).strip() not in ["", "nan"]:
-                lessons.append(str(lesson_info))
 
-        result.append({
-            "sheet": sheet,
-            "date": date_on_sheet,
-            "lessons": lessons
-        })
+        for col_idx in range(1, len(df.columns)):
+            cell_value = clean_cell_value(df.iloc[class_row][col_idx])
 
-    return result
+            if cell_value:
+                lesson_name, classroom = extract_lesson_info(cell_value)
 
+                if lesson_name:
+                    lessons.append({
+                        "lesson": lesson_name,
+                        "classroom": classroom if classroom else "",
+                        "lesson_number": col_idx
+                    })
 
-# ------------------
-# Пример использования
-# ------------------
+        if lessons:
+            results.append({
+                "date": date,
+                "lessons": lessons
+            })
 
-file_path = "schedule.xlsx"
-class_name = "7А"
+    return results
 
-parsed = parse_schedule(file_path, class_name)
-
-for entry in parsed:
-    print("Лист:", entry["sheet"])
-    print("Дата:", entry["date"])
-    print("Уроки и кабинеты:")
-    for lesson in entry["lessons"]:
-        print(" •", lesson)
-    print()
+if __name__ == "__main__":
+    schedule_9a = parse_schedule_excel('schedule.xlsx', '9А')
+    print(schedule_9a)
