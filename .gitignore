@@ -3,3 +3,4 @@ venv/
 docker-compose.yml
 activate.sh
 .postgres_running
+__pycache__/
