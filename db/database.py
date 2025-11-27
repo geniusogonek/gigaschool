@@ -120,6 +120,7 @@ async def import_schedule_from_json(session: AsyncSession, tg_id: int, schedule_
             subject_name = lesson_data['lesson']
             classroom = lesson_data['classroom'] or None
             lesson_number = lesson_data['lesson_number']
+            load_level = lesson_data.get('load_level', 5)
 
             result = await session.execute(
                 select(Subject).filter_by(
@@ -133,13 +134,16 @@ async def import_schedule_from_json(session: AsyncSession, tg_id: int, schedule_
                 subject = Subject(
                     user_id=user.id,
                     name=subject_name,
-                    classroom=classroom
+                    classroom=classroom,
+                    load_level=load_level
                 )
                 session.add(subject)
                 await session.flush()
             else:
                 if classroom and not subject.classroom:
                     subject.classroom = classroom
+                if load_level and not subject.load_level:
+                    subject.load_level = load_level
 
             result = await session.execute(
                 select(Schedule).filter_by(
@@ -166,6 +170,7 @@ async def import_schedule_from_json(session: AsyncSession, tg_id: int, schedule_
     except IntegrityError as e:
         await session.rollback()
         raise Exception(f"Ошибка при сохранении данных: {str(e)}")
+
 
 
 async def get_all_user_subjects(session: AsyncSession, tg_id: int) -> list[dict]:
