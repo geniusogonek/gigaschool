@@ -1,5 +1,5 @@
 import asyncio
-from json import loads
+from json import loads, dumps
 import os
 import logging
 import speech_recognition as sr
@@ -14,6 +14,8 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from pydub import AudioSegment
 
 from dotenv import load_dotenv
+
+import aio_pika
 
 from db.core import init_db, get_session_maker
 from db.database import (
@@ -43,6 +45,7 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 POSTGRES_URL = os.getenv("POSTGRES_URL")
+RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost/")
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(BOT_TOKEN)
@@ -51,6 +54,32 @@ dp = Dispatcher(storage=storage)
 
 engine = None
 SessionMaker = None
+rabbitmq_connection = None
+rabbitmq_channel = None
+
+
+async def send_notification_to_queue(tg_id: int, datetime: str, text: str):
+    global rabbitmq_channel
+    
+    if rabbitmq_channel is None:
+        logging.error("RabbitMQ channel is not initialized")
+        return
+    
+    message_data = {
+        "tg_id": tg_id,
+        "datetime": datetime,
+        "text": text
+    }
+    
+    await rabbitmq_channel.default_exchange.publish(
+        aio_pika.Message(
+            body=dumps(message_data).encode(),
+            content_type="application/json"
+        ),
+        routing_key="notifications"
+    )
+    
+    logging.info(f"Notification sent to queue: {message_data}")
 
 
 @dp.message(CommandStart())
@@ -195,17 +224,40 @@ async def speak(message: Message, state: FSMContext):
                     await message.answer(f"✏️ Расписание обновлено!\n\n" + "\n".join(changes_text))
                 except Exception as e:
                     await message.answer(f"Не удалось изменить расписание: {str(e)}")
+        case "notify":
+            try:
+                await send_notification_to_queue(
+                    tg_id=message.from_user.id,
+                    datetime=json_data["datetime"],
+                    text=json_data["text"]
+                )
+                await message.answer(f"⏰ Напоминание установлено на {json_data['datetime']}!\nТекст: {json_data['text']}")
+            except Exception as e:
+                logging.error(f"Failed to send notification to queue: {e}")
+                await message.answer("Не удалось установить напоминание :(")
         case _:
             await message.answer(str(json_data))
 
 
-
 async def main():
-    global engine, SessionMaker
+    global engine, SessionMaker, rabbitmq_connection, rabbitmq_channel
+    
     engine = await init_db(POSTGRES_URL)
     SessionMaker = get_session_maker(engine)
-
-    await dp.start_polling(bot)
+    
+    try:
+        rabbitmq_connection = await aio_pika.connect_robust(RABBITMQ_URL)
+        rabbitmq_channel = await rabbitmq_connection.channel()
+        await rabbitmq_channel.declare_queue("notifications", durable=True)
+        logging.info("RabbitMQ connection established")
+    except Exception as e:
+        logging.error(f"Failed to connect to RabbitMQ: {e}")
+    
+    try:
+        await dp.start_polling(bot)
+    finally:
+        if rabbitmq_connection:
+            await rabbitmq_connection.close()
 
 
 if __name__ == "__main__":
