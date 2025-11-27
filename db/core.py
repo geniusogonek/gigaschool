@@ -8,11 +8,6 @@ class Base(DeclarativeBase):
 
 
 async def init_db(url: str):
-    """
-    url пример:
-    postgresql+asyncpg://user:password@localhost:5432/mydb
-    """
-
     engine = create_async_engine(url, echo=False)
 
     async with engine.begin() as conn:
