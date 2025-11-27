@@ -2,11 +2,13 @@ import pandas as pd
 import re
 from datetime import datetime
 
+
 def parse_schedule_excel(file_path, class_number):
     def clean_cell_value(value):
         if pd.isna(value) or value in ['---', '----', '-----', '', ' ']:
             return None
         return str(value).strip()
+
 
     def extract_lesson_info(cell_value):
         if not cell_value:
@@ -20,6 +22,7 @@ def parse_schedule_excel(file_path, class_number):
             return lesson, classroom
         else:
             return cell_value, None
+
 
     def extract_date_from_sheet(df):
         for i in range(min(10, len(df))):
@@ -52,6 +55,7 @@ def parse_schedule_excel(file_path, class_number):
                     return next_cell.strftime('%d.%m.%Y')
         
         return None
+
 
     excel_file = pd.ExcelFile(file_path)
     results = []
@@ -88,19 +92,32 @@ def parse_schedule_excel(file_path, class_number):
             continue
 
         lessons = []
+        max_lesson_number = 0
 
         for col_idx in range(1, len(df.columns)):
             cell_value = clean_cell_value(df.iloc[class_row][col_idx])
 
             if cell_value:
                 lesson_name, classroom = extract_lesson_info(cell_value)
-
                 if lesson_name:
-                    lessons.append({
-                        "lesson": lesson_name,
-                        "classroom": classroom if classroom else "",
-                        "lesson_number": col_idx
-                    })
+                    max_lesson_number = max(max_lesson_number, col_idx)
+
+        for col_idx in range(1, max_lesson_number + 1):
+            cell_value = clean_cell_value(df.iloc[class_row][col_idx])
+
+            if cell_value:
+                lesson_name, classroom = extract_lesson_info(cell_value)
+                lessons.append({
+                    "lesson": lesson_name if lesson_name else "---",
+                    "classroom": classroom if classroom else "",
+                    "lesson_number": col_idx
+                })
+            else:
+                lessons.append({
+                    "lesson": "---",
+                    "classroom": "",
+                    "lesson_number": col_idx
+                })
 
         if lessons:
             results.append({
@@ -109,6 +126,7 @@ def parse_schedule_excel(file_path, class_number):
             })
 
     return results
+
 
 if __name__ == "__main__":
     schedule_9a = parse_schedule_excel('schedule.xlsx', '9А')
